@@ -3,6 +3,7 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <limits.h>
 
 #define BUFFER 2048
 #define ARGSIZE 512
@@ -146,12 +147,36 @@ void shExe(char **args)
     }
 }
 
+void clearBuff(char buff[PATH_MAX + 1])
+{
+    int i = 0;
+    for(;i < PATH_MAX + 1; i++)
+    {
+        buff[i] = '\0';
+    }
+}
+
+int prevDirPos(char buff[PATH_MAX + 1])
+{
+    int i = strlen(buff);
+    for(; i >= 0; i--)
+    {
+        if(buff[i] == '/')
+        {
+            return i;
+        }
+    }
+    return 0;
+}
+
 int main()
 {
     char *line;
     char **args;
     //int status;
+    char buff[PATH_MAX + 1];
     int shLoop = 1;
+    int upDir;
 
     do {
         //assistance for allocating the args array dynamically taken from the following site
@@ -168,17 +193,17 @@ int main()
         if (args[0] == NULL)
         {
             printf("args[0] is NULL\n");
+            freeArgs(args); //TODO: is this needed?
             continue;
         }
 
-        //Handling comments
+        //Handle comments, builtins, then execute if none of those
         if (strcmp(args[0], "#") == 0)
         {
+            //Handling comments
             printf("comment\n");
-            continue;
         }
-
-        if(strcmp(args[0], "exit") == 0)
+        else if(strcmp(args[0], "exit") == 0)
         {
             //TODO work out how the loop should work with exit
             //shLoop = 0;
@@ -191,21 +216,38 @@ int main()
         }
         else if (strcmp(args[0], "cd") == 0)
         {
-            printf("change directory goes here\n");
             if (args[1] == NULL)
             {
                 //this needs to do what cd does
+                chdir(getenv("HOME"));
             }
             else if (strcmp(args[1], "..") == 0)
             {
                 //this needs to move up a path
+                if (getcwd(buff, PATH_MAX) != NULL)
+                {
+                    upDir = prevDirPos(buff);
+                    buff[upDir] = '\0';
+                    chdir(buff);
+                    clearBuff(buff);
+                }
             }
             else
             {
                 //chdir(args[1]);
+                if (getcwd(buff, PATH_MAX) != NULL)
+                {
+                    strcat(buff, "/");
+                    strcat(buff, args[1]);
+                    chdir(buff);
+                    clearBuff(buff);
+                }
             }
         }
-        shExe(args);
+        else
+        {
+            shExe(args);
+        }
         freeArgs(args);
     } while(shLoop);
 
