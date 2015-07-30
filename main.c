@@ -1,9 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
 #include <unistd.h>
 #include <limits.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #define BUFFER 2048
 #define ARGSIZE 512
@@ -89,56 +91,146 @@ char* shRead()
     }
 }
 
-void shExe(char **args)
+void shExe(char **args, int *fgStat)
 {
-    pid_t spawnpid, exitpid;
-    int exitMethod, pos;
+    pid_t spawnpid, exitpid, bgPid;
+    int pos, fd, fd2, out, in, bgStat;
+    int bg = 0;
+
+    pos = 0;
+    while(args[pos] != NULL)
+    {
+        if(strcmp(args[pos], "&") == 0)
+        {
+            bg = 1;
+        }
+        pos++;
+    }
 
     spawnpid = fork();
     if (spawnpid == 0)
     {
-                //check for IO redirection, bg
+        //CHILD
+        //check for IO redirection, bg
         pos = 0;
+        //initialize out and in to an invalid number
+        out = -5;
+        in = -5;
+
         while(args[pos] != NULL)
         {
             //printf("%s\n", args[pos]);
             if(strcmp(args[pos], "<") == 0)
             {
-                //TODO
+                //input redirection
+                fd2 = open(args[pos + 1], O_RDONLY);
+                if(fd2 == -1)
+                {
+                    perror("file read");
+                    exit(1);
+                }
+                in = dup2(fd2, 0);
+                if(in == -1)
+                {
+                    perror("dup2");
+                    exit(1);
+                }
+                //free the argument and set to null to prevent exec from using
+                //the command
+                free(args[pos]);
+                args[pos] = NULL;
             }
             else if (strcmp(args[pos], ">") == 0)
             {
-                //TODO
+                //output redirection
+                fd = open(args[pos + 1], O_WRONLY|O_CREAT|O_TRUNC, 0644);
+                if(fd == -1)
+                {
+                    perror("file write");
+                    exit(1);
+                }
+                out = dup2(fd, 1);
+                if(out == -1)
+                {
+                    perror("dup2");
+                    exit(1);
+                }
+                //free the argument and set to null to prevent exec from using
+                //the command
+                free(args[pos]);
+                args[pos] = NULL;
+
             }
             else if (strcmp(args[pos], "&") == 0)
             {
-                //TODO
+                //background process
+                if (out < 0)
+                {
+                    fd = open("/dev/null", O_WRONLY);
+                    if(fd == -1)
+                    {
+                        perror("bg file write");
+                        exit(1);
+                    }
+                    out = dup2(fd, 1);
+                    if(out == -1)
+                    {
+                        perror("bg dup2");
+                        exit(1);
+                    }
+                }
+
+                if (in < 0)
+                {
+                    fd2 = open("/dev/null", O_RDONLY);
+                    if(fd2 == -1)
+                    {
+                        perror("bg file read");
+                        exit(1);
+                    }
+                    in = dup2(fd2, 0);
+                    if(in == -1)
+                    {
+                        perror("bg dup2");
+                        exit(1);
+                    }
+                }
+                //free the argument and set to null to prevent exec from using
+                //the command
+                free(args[pos]);
+                args[pos] = NULL;
             }
             pos++;
         }
         //printf("child: executing\n");
         execvp(args[0], args);
-        printf("Exec error\n");
+        perror(args[0]);
         exit(1);
     }
     else if (spawnpid > 0)
     {
-        //printf("parent: waiting\n");
-        exitpid = wait(&exitMethod);
-        if (exitpid == -1)
+        //PARENT
+        if(bg == 1)
         {
-            printf("wait failed\n");
-            exit(1);
-        }
-        if (WIFEXITED(exitMethod))
-        {
-            //printf("parent: child exited normally[%d]\n", exitMethod);
-            //exitMethod = WEXITSTATUS(exitMethod);
-            //printf("exit status was %d\n", exitMethod);
+            printf("background pid is %d\n", (int)spawnpid);
+            //background process
         }
         else
         {
-            printf("Child terminated by signal\n");
+            exitpid = wait(fgStat);
+            //exitpid = waitpid(-1, &exitMethod, 0);
+            //check the exit status
+            if (exitpid == -1)
+            {
+                perror("fg wait");
+            }
+            else if(exitpid > 0)
+            {
+                if (WIFSIGNALED(*fgStat))
+                {
+                    printf("fg terminated by signal %d\n", (int) exitpid, WTERMSIG(*fgStat));
+                }
+            }
         }
     }
     else
@@ -177,6 +269,9 @@ int main()
     char buff[PATH_MAX + 1];
     int shLoop = 1;
     int upDir;
+    pid_t bgPid;
+    int bgStat;
+    int fgStat = 0;
 
     do {
         //assistance for allocating the args array dynamically taken from the following site
@@ -184,15 +279,35 @@ int main()
         args = (char **) malloc(sizeof(char *) * ARGSIZE);
         if(args == NULL) exit(1);   //memory did not allocate properly
 
+        fflush(stdout);
+
+        //Check for background process completion
+        bgPid = waitpid(-1, &bgStat, WNOHANG);
+        if(bgPid > 0)
+        {
+            //referenced code on following page at bottom
+            //http://man7.org/linux/man-pages/man2/wait.2.html
+            if (WIFEXITED(bgStat))
+            {
+                printf("background pid %d is done: exit value %d\n", (int) bgPid, WEXITSTATUS(bgStat));
+            }
+            else if (WIFSIGNALED(bgStat))
+            {
+                printf("background pid %d is done: terminated by signal %d\n", (int) bgPid, WTERMSIG(bgStat));
+            }
+
+        }
+
         //printing the prompt, reading input, and tokenizing input
+        fflush(stdout);
         printf(": ");
+        fflush(stdout);
         line = shRead();
         shSplit(line, args);
 
         //Handling blank input
         if (args[0] == NULL)
         {
-            printf("args[0] is NULL\n");
             freeArgs(args); //TODO: is this needed?
             continue;
         }
@@ -212,7 +327,15 @@ int main()
         }
         else if (strcmp(args[0], "status") == 0)
         {
-            printf("status goes here\n");
+            if (WIFEXITED(fgStat))
+            {
+                printf("exit value %d\n", WEXITSTATUS(fgStat));
+            }
+            else if (WIFSIGNALED(fgStat))
+            {
+                printf("terminated by signal %d\n", WTERMSIG(fgStat));
+            }
+
         }
         else if (strcmp(args[0], "cd") == 0)
         {
@@ -246,7 +369,7 @@ int main()
         }
         else
         {
-            shExe(args);
+            shExe(args, &fgStat);
         }
         freeArgs(args);
     } while(shLoop);
