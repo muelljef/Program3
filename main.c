@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <limits.h>
+#include <signal.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -91,11 +92,26 @@ char* shRead()
     }
 }
 
-void shExe(char **args, int *fgStat)
+void shExe(char **args, int *fgStat, struct sigaction *fgChild)
 {
     pid_t spawnpid, exitpid, bgPid;
     int pos, fd, fd2, out, in, bgStat;
     int bg = 0;
+
+    bgPid = waitpid(-1, &bgStat, WNOHANG);
+    if(bgPid > 0)
+    {
+        //referenced code on following page at bottom
+        //http://man7.org/linux/man-pages/man2/wait.2.html
+        if (WIFEXITED(bgStat))
+        {
+            printf("background pid %d is done: exit value %d\n", (int)bgPid, WEXITSTATUS(bgStat));
+        }
+        else if (WIFSIGNALED(bgStat))
+        {
+            printf("background pid %d is done: terminated by signal %d\n", (int)bgPid, WTERMSIG(bgStat));
+        }
+    }
 
     pos = 0;
     while(args[pos] != NULL)
@@ -111,6 +127,7 @@ void shExe(char **args, int *fgStat)
     if (spawnpid == 0)
     {
         //CHILD
+        sigaction(SIGINT, fgChild, NULL);
         //check for IO redirection, bg
         pos = 0;
         //initialize out and in to an invalid number
@@ -217,18 +234,55 @@ void shExe(char **args, int *fgStat)
         }
         else
         {
-            exitpid = wait(fgStat);
-            //exitpid = waitpid(-1, &exitMethod, 0);
-            //check the exit status
-            if (exitpid == -1)
+            if (strcmp(args[0], "kill") == 0)
             {
-                perror("fg wait");
-            }
-            else if(exitpid > 0)
-            {
-                if (WIFSIGNALED(*fgStat))
+                exitpid = waitpid(-1, fgStat, 0);
+                //check the exit status
+                if (exitpid == -1)
                 {
-                    printf("fg terminated by signal %d\n", (int) exitpid, WTERMSIG(*fgStat));
+                    perror("fg kill wait 1");
+                }
+                else if(exitpid > 0)
+                {
+                    if (WIFSIGNALED(*fgStat))
+                    {
+                        printf("background pid %d is done: terminated by signal %d\n", (int)exitpid, WTERMSIG(*fgStat));
+                    }
+                }
+                exitpid = waitpid(spawnpid, fgStat, 0);
+                //check the exit status
+                if (exitpid == -1)
+                {
+                    perror("fg kill wait 2");
+                }
+                else if(exitpid > 0)
+                {
+                    if (WIFSIGNALED(*fgStat))
+                    {
+                        printf("fg terminated by signal %d [pid=%d]\n", WTERMSIG(*fgStat), (int)exitpid);
+                    }
+                }
+            }
+            else
+            {
+                exitpid = waitpid(-1, fgStat, 0);
+                //check the exit status
+                if (exitpid == -1)
+                {
+                    perror("fg single wait");
+                }
+                else if(exitpid > 0)
+                {
+                /*
+                    if (WIFEXITED(*fgStat))
+                    {
+                        printf("fg pid %d is done: exit status %d\n", (int)exitpid, WEXITSTATUS(*fgStat));
+                    }
+                */
+                    if (WIFSIGNALED(*fgStat))
+                    {
+                        printf("fg terminated by signal %d [pid=%d]\n", WTERMSIG(*fgStat), (int)exitpid);
+                    }
                 }
             }
         }
@@ -265,13 +319,18 @@ int main()
 {
     char *line;
     char **args;
-    //int status;
     char buff[PATH_MAX + 1];
     int shLoop = 1;
     int upDir;
     pid_t bgPid;
     int bgStat;
     int fgStat = 0;
+
+
+    struct sigaction act, fgChild;
+    act.sa_handler = SIG_IGN;
+
+    sigaction(SIGINT, &act, &fgChild);
 
     do {
         //assistance for allocating the args array dynamically taken from the following site
@@ -289,13 +348,12 @@ int main()
             //http://man7.org/linux/man-pages/man2/wait.2.html
             if (WIFEXITED(bgStat))
             {
-                printf("background pid %d is done: exit value %d\n", (int) bgPid, WEXITSTATUS(bgStat));
+                printf("background pid %d is done: exit value %d\n", (int)bgPid, WEXITSTATUS(bgStat));
             }
             else if (WIFSIGNALED(bgStat))
             {
-                printf("background pid %d is done: terminated by signal %d\n", (int) bgPid, WTERMSIG(bgStat));
+                printf("background pid %d is done: terminated by signal %d\n", (int)bgPid, WTERMSIG(bgStat));
             }
-
         }
 
         //printing the prompt, reading input, and tokenizing input
@@ -316,7 +374,10 @@ int main()
         if (strcmp(args[0], "#") == 0)
         {
             //Handling comments
-            printf("comment\n");
+            //this is not necessary as all code is in if else statements (shExe) will
+            //not be called because it is in the else stmt of this block
+            freeArgs(args);
+            continue;
         }
         else if(strcmp(args[0], "exit") == 0)
         {
@@ -369,7 +430,7 @@ int main()
         }
         else
         {
-            shExe(args, &fgStat);
+            shExe(args, &fgStat, &fgChild);
         }
         freeArgs(args);
     } while(shLoop);
