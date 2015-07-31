@@ -259,13 +259,43 @@ void shExe(char **args, int *fgStat, struct sigaction *fgChild)
                 {
                     if (WIFSIGNALED(*fgStat))
                     {
-                        printf("fg terminated by signal %d [pid=%d]\n", WTERMSIG(*fgStat), (int)exitpid);
+                        printf("fg terminated by signal %d\n", WTERMSIG(*fgStat), (int)exitpid);
                     }
                 }
             }
-            else
+            else if(strcmp(args[0], "pkill") == 0)
             {
                 exitpid = waitpid(-1, fgStat, 0);
+                //TODO: remove printf("pkill spawnid: %d\n", (int)spawnpid);
+                //check the exit status
+                if (exitpid == -1)
+                {
+                    perror("fg kill wait 1");
+                }
+                else if(exitpid > 0)
+                {
+                    if (WIFSIGNALED(*fgStat))
+                    {
+                        printf("background pid %d is done: terminated by signal %d\n", (int)exitpid, WTERMSIG(*fgStat));
+                    }
+                }
+                exitpid = waitpid(spawnpid, fgStat, 0);
+                if(exitpid == -1)
+                {
+                    perror("pkill");
+                }
+                else if (exitpid > 0)
+                {
+                    if (WIFSIGNALED(*fgStat))
+                    {
+                        printf("pkill pid %d is done: terminated by signal %d\n", (int)exitpid, WTERMSIG(*fgStat));
+                    }
+                }
+
+            }
+            else
+            {
+                exitpid = waitpid(spawnpid, fgStat, 0);
                 //check the exit status
                 if (exitpid == -1)
                 {
@@ -281,7 +311,7 @@ void shExe(char **args, int *fgStat, struct sigaction *fgChild)
                 */
                     if (WIFSIGNALED(*fgStat))
                     {
-                        printf("fg terminated by signal %d [pid=%d]\n", WTERMSIG(*fgStat), (int)exitpid);
+                        printf("fg terminated by signal %d\n", WTERMSIG(*fgStat), (int)exitpid);
                     }
                 }
             }
