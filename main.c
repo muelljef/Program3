@@ -11,108 +11,132 @@
 #define BUFFER 2048
 #define ARGSIZE 512
 
-void shSplit(char *line, char **args)
+//function declarations
+void shSplit(char *line, char **args);
+void freeArgs(char **args);
+char* shRead();
+void clearBuff(char buff[PATH_MAX + 1]);
+int prevDirPos(char buff[PATH_MAX + 1]);
+void killChProcs(pid_t *allPid);
+void checkBgProcs();
+void shExe(char **args, int *fgStat, struct sigaction *fgChild, pid_t *allPid);
+void cdFunc(char **args);
+
+int main()
 {
-    //container for the arguments
-    char *token;
+    char *line;                 //to take user input for commands
+    char **args;                //to parse user input to separate commands
+    int shLoop = 1;             //while loop boolean
+    int fgStat = 0;             //status of last foreground execution
     int i;
-    const char delimiters[] = " ";
-    int pos = 0;
+    pid_t allPid[1000];         //array that holds all pids
 
-    //initialize the strings to NULL
-    // TODO do I need this?
-    for(i = 0; i < ARGSIZE; i++)
+    //initialize allPid's values to 0
+    for(i = 0; i < 1000; i++)
     {
-        args[i] = NULL;
+        allPid[i] = 0;
     }
 
-    //tokenize all the arguments from the line
-    token = strtok(line, delimiters);
-    while (token != NULL)
-    {
-        //TODO: does this need to be something other than exit?
-        if (pos >= ARGSIZE) exit(1);
-        //TODO: make sure to free this string properly
-        args[pos] = strdup(token);
-        if(args[pos] == NULL) exit(1);   //string did not allocate properly
-        //take the next string
-        token = strtok(NULL, delimiters);
-        //increment the count
-        pos++;
-    }
+    //Setting up the signal interrupt handler
+    //to catch Ctrl-C
+    struct sigaction act, fgChild;
+    act.sa_handler = SIG_IGN;
+    act.sa_flags = 0;
+    //for returning to default
+    fgChild.sa_handler = SIG_DFL;
+    act.sa_flags = 0;
+    //set the sigaction to act handler
+    sigaction(SIGINT, &act, &fgChild);
 
-    return;
-}
+    do {
+        //assistance for allocating the args array dynamically taken from the following site
+        //http://stackoverflow.com/questions/7652293/how-do-i-dynamically-allocate-an-array-of-strings-in-c
+        args = (char **) malloc(sizeof(char *) * ARGSIZE);
+        if(args == NULL){
+            //memory did not allocate properly
+            perror("args malloc");
+            exit(1);
+        }
 
-void freeArgs(char **args)
-{
-    int i;
-    for(i = 0; i < ARGSIZE; i++)
-    {
-        free(args[i]);
-        args[i] = NULL;
-    }
-    free(args);
-    args = NULL;
-}
+        //Check for background process completion
+        checkBgProcs();
 
-char* shRead()
-{
-    int c;
-    int position = 0;
-    char *buffer = malloc(sizeof(char) * BUFFER);
+        //printing the prompt, reading input, and tokenizing input
+        printf(": ");
+        fflush(stdout);         //flush the stream
+        line = shRead();        //read user input
+        shSplit(line, args);    //parse the input into array of arguments
 
-    if (!buffer)
-    {
-        fprintf(stderr, "smallsh: allocation error\n");
-        exit(1);
-    }
-
-    while (1)
-    {
-        c = getchar();
-
-        if (c == EOF || c == '\n')
+        //Handling blank input
+        if (args[0] == NULL)
         {
-            buffer[position] = '\0';
-            return buffer;
+            //free the line and arguments strings
+            free(line);
+            freeArgs(args);
+            continue;
+        }
+
+        //Handle comments, builtins, then execute if none of those
+        if (strcmp(args[0], "#") == 0)
+        {
+            //Handling comments
+            //free the line and arguments strings
+            free(line);
+            freeArgs(args);
+            continue;
+        }
+        else if(strcmp(args[0], "exit") == 0)
+        {
+            //make sure all children processes have been killed
+            killChProcs(allPid);
+            //free the line and arguments strings
+            free(line);
+            freeArgs(args);
+            exit(0);
+        }
+        else if (strcmp(args[0], "status") == 0)
+        {
+            if (WIFEXITED(fgStat))
+            {
+                printf("exit value %d\n", WEXITSTATUS(fgStat));
+            }
+            else if (WIFSIGNALED(fgStat))
+            {
+                printf("terminated by signal %d\n", WTERMSIG(fgStat));
+            }
+        }
+        else if (strcmp(args[0], "cd") == 0)
+        {
+            cdFunc(args);
         }
         else
         {
-            buffer[position] = c;
+            shExe(args, &fgStat, &fgChild, allPid);
         }
-        position++;
 
-        //If we have exceeded the buffer exit
-        if (position >= BUFFER)
-        {
-            printf("Exceeded buffer\n");
-            return NULL;
-        }
-    }
+        //free the line and arguments strings before looping through again.
+        free(line);
+        freeArgs(args);
+    } while(shLoop);
+
+    return 0;
 }
 
-void shExe(char **args, int *fgStat, struct sigaction *fgChild)
+//*****************************************************************************
+//                              SHELL EXECUTION FUNCTION
+//*****************************************************************************
+
+//Entry:
+//Exit:
+void shExe(char **args, int *fgStat, struct sigaction *fgChild, pid_t *allPid)
 {
-    pid_t spawnpid, exitpid, bgPid;
-    int pos, fd, fd2, out, in, bgStat;
-    int bg = 0;
+    //pos and i as iterators,
+    //fd, fd2, out, in as file desc
+    int pos, fd, fd2, out, in, i;
+    pid_t spawnpid, exitpid;        //to catch fork() and waitpid() pid_t
+    int bg = 0;                     //boolean for background process
 
-    bgPid = waitpid(-1, &bgStat, WNOHANG);
-    if(bgPid > 0)
-    {
-        //referenced code on following page at bottom
-        //http://man7.org/linux/man-pages/man2/wait.2.html
-        if (WIFEXITED(bgStat))
-        {
-            printf("background pid %d is done: exit value %d\n", (int)bgPid, WEXITSTATUS(bgStat));
-        }
-        else if (WIFSIGNALED(bgStat))
-        {
-            printf("background pid %d is done: terminated by signal %d\n", (int)bgPid, WTERMSIG(bgStat));
-        }
-    }
-
+    //loop through the arguments and set the bg flag if "&" found
     pos = 0;
     while(args[pos] != NULL)
     {
@@ -123,17 +147,26 @@ void shExe(char **args, int *fgStat, struct sigaction *fgChild)
         pos++;
     }
 
+    //create a child process
     spawnpid = fork();
     if (spawnpid == 0)
     {
         //CHILD
-        sigaction(SIGINT, fgChild, NULL);
-        //check for IO redirection, bg
-        pos = 0;
-        //initialize out and in to an invalid number
+        if (bg != 1)
+        {
+            //FOREGROUND PROCESS
+            //change the siging action back to default
+            //for the fg process
+            sigaction(SIGINT, fgChild, NULL);
+        }
+
+        //initialize out and in fds to invalid numbers
         out = -5;
         in = -5;
 
+        //check for IO redirection
+        //set bg IO redirection if needed
+        pos = 0;
         while(args[pos] != NULL)
         {
             //printf("%s\n", args[pos]);
@@ -180,7 +213,11 @@ void shExe(char **args, int *fgStat, struct sigaction *fgChild)
             }
             else if (strcmp(args[pos], "&") == 0)
             {
-                //background process
+                //BACKGROUND PROCESS
+                //since & must come last IO redirect will be set
+                //if user specified any
+
+                //if user did not specify out, redirect to /dev/null
                 if (out < 0)
                 {
                     fd = open("/dev/null", O_WRONLY);
@@ -196,7 +233,7 @@ void shExe(char **args, int *fgStat, struct sigaction *fgChild)
                         exit(1);
                     }
                 }
-
+                //if user did not specify in, redirect to /dev/null
                 if (in < 0)
                 {
                     fd2 = open("/dev/null", O_RDONLY);
@@ -219,100 +256,51 @@ void shExe(char **args, int *fgStat, struct sigaction *fgChild)
             }
             pos++;
         }
-        //printf("child: executing\n");
+        //execute the arguments
         execvp(args[0], args);
+        //if an error occurred with execution report the error
         perror(args[0]);
+        //return from child process with exit status 1
         exit(1);
     }
     else if (spawnpid > 0)
     {
         //PARENT
+        //find the next 0 value in the allPid array
+        //and add the spawnid to the allPid array there
+        for(i = 0; i < 1000; i++)
+        {
+            if(allPid[i] == 0)
+            {
+                allPid[i] = spawnpid;
+                break;
+            }
+        }
+
         if(bg == 1)
         {
+            //BACKGROUND PROCESS
+            //print the bg proc id
             printf("background pid is %d\n", (int)spawnpid);
-            //background process
         }
         else
         {
-            if (strcmp(args[0], "kill") == 0)
+            //FOREGROUND PROCESS
+            //wait for the recently created spawnid as that is the
+            //foreground processx
+            exitpid = waitpid(spawnpid, fgStat, 0);
+            //check the exit status
+            //if greater than 0, then a process was waited on
+            if (exitpid == -1)
             {
-                exitpid = waitpid(-1, fgStat, 0);
-                //check the exit status
-                if (exitpid == -1)
-                {
-                    perror("fg kill wait 1");
-                }
-                else if(exitpid > 0)
-                {
-                    if (WIFSIGNALED(*fgStat))
-                    {
-                        printf("background pid %d is done: terminated by signal %d\n", (int)exitpid, WTERMSIG(*fgStat));
-                    }
-                }
-                exitpid = waitpid(spawnpid, fgStat, 0);
-                //check the exit status
-                if (exitpid == -1)
-                {
-                    perror("fg kill wait 2");
-                }
-                else if(exitpid > 0)
-                {
-                    if (WIFSIGNALED(*fgStat))
-                    {
-                        printf("fg terminated by signal %d\n", WTERMSIG(*fgStat), (int)exitpid);
-                    }
-                }
+                perror("fg wait");
             }
-            else if(strcmp(args[0], "pkill") == 0)
+            else if(exitpid > 0)
             {
-                exitpid = waitpid(-1, fgStat, 0);
-                //TODO: remove printf("pkill spawnid: %d\n", (int)spawnpid);
-                //check the exit status
-                if (exitpid == -1)
+                //if the process was terminate by a signal, notify the user which one
+                if (WIFSIGNALED(*fgStat))
                 {
-                    perror("fg kill wait 1");
-                }
-                else if(exitpid > 0)
-                {
-                    if (WIFSIGNALED(*fgStat))
-                    {
-                        printf("background pid %d is done: terminated by signal %d\n", (int)exitpid, WTERMSIG(*fgStat));
-                    }
-                }
-                exitpid = waitpid(spawnpid, fgStat, 0);
-                if(exitpid == -1)
-                {
-                    perror("pkill");
-                }
-                else if (exitpid > 0)
-                {
-                    if (WIFSIGNALED(*fgStat))
-                    {
-                        printf("pkill pid %d is done: terminated by signal %d\n", (int)exitpid, WTERMSIG(*fgStat));
-                    }
-                }
-
-            }
-            else
-            {
-                exitpid = waitpid(spawnpid, fgStat, 0);
-                //check the exit status
-                if (exitpid == -1)
-                {
-                    perror("fg single wait");
-                }
-                else if(exitpid > 0)
-                {
-                /*
-                    if (WIFEXITED(*fgStat))
-                    {
-                        printf("fg pid %d is done: exit status %d\n", (int)exitpid, WEXITSTATUS(*fgStat));
-                    }
-                */
-                    if (WIFSIGNALED(*fgStat))
-                    {
-                        printf("fg terminated by signal %d\n", WTERMSIG(*fgStat), (int)exitpid);
-                    }
+                    printf("terminated by signal %d\n", WTERMSIG(*fgStat), (int)exitpid);
                 }
             }
         }
@@ -321,8 +309,161 @@ void shExe(char **args, int *fgStat, struct sigaction *fgChild)
     {
         printf("fork failed\n");
     }
+
+    //check for all waiting background processes
+    checkBgProcs();
 }
 
+//*****************************************************************************
+//                              HELPER INPUT FUNCTIONS
+//*****************************************************************************
+
+// Entry:
+// Exit:
+// adjust code from website
+char* shRead()
+{
+    int c;
+    int position = 0;
+    char *buffer = malloc(sizeof(char) * BUFFER);
+
+    //if the buffer did not allocate
+    //exit and report the error
+    if (!buffer)
+    {
+        perror("smallsh");
+        exit(1);
+    }
+
+    while (1)
+    {
+        //get a character from the input
+        c = getchar();
+
+        if (c == EOF || c == '\n')
+        {
+            //if newline or end of file
+            //replace with null and return the input
+            buffer[position] = '\0';
+            return buffer;
+        }
+        else
+        {
+            //otherwise add the character to the string
+            buffer[position] = c;
+        }
+        //increment position
+        position++;
+
+        //If we have exceeded the buffer exit
+        if (position >= BUFFER)
+        {
+            printf("Exceeded buffer\n");
+            return NULL;
+        }
+    }
+}
+
+// Entry:
+// Exit:
+void shSplit(char *line, char **args)
+{
+    //container for the arguments
+    char *token;
+    int i;
+    const char delimiters[] = " ";
+    int pos = 0;
+
+    //initialize the strings to NULL
+    for(i = 0; i < ARGSIZE; i++)
+    {
+        args[i] = NULL;
+    }
+
+    //tokenize all the arguments from the line
+    token = strtok(line, delimiters);
+    while (token != NULL)
+    {
+        //Exit if too many arguments
+        if (pos >= ARGSIZE)
+        {
+            perror("arguments");
+            exit(1);
+        }
+
+        //copy the string with a
+        args[pos] = strdup(token);
+        if(args[pos] == NULL) exit(1);   //string did not allocate properly
+        //take the next string
+        token = strtok(NULL, delimiters);
+        //increment the count
+        pos++;
+    }
+
+    return;
+}
+
+//*****************************************************************************
+//                              CD FUNCTIONS
+//*****************************************************************************
+
+void cdFunc(char **args)
+{
+    char buff[PATH_MAX + 1];    //to store path for cd command
+    int upDir;                  //rel path boolean to move up a directory
+
+    if (args[1] == NULL)
+    {
+        //cd command alone
+        chdir(getenv("HOME"));
+    }
+    else if (strcmp(args[1], "..") == 0)
+    {
+        //moving up a path "cd .."
+        if (getcwd(buff, PATH_MAX) != NULL)
+        {
+            //get the location of the last "/"
+            upDir = prevDirPos(buff);
+            //protect the root directory
+            if(upDir > 0)
+            {
+                //replace it with null to set path up one folder
+                buff[upDir] = '\0';
+                //change directory
+                chdir(buff);
+                clearBuff(buff);
+            }
+            else if (upDir == 0)
+            {
+                //if upDir is 0, then change to root directory
+                chdir("/");
+            }
+            else
+            {
+                //let user know they cannot move higher
+                printf("In root directory, cannot move higher");
+            }
+        }
+    }
+    else
+    {
+        //moving down a folder (eg "cd cs344")
+        if (getcwd(buff, PATH_MAX) != NULL)
+        {
+            //buff has the current working directory
+            //append a "/"
+            strcat(buff, "/");
+            //append the folder name
+            strcat(buff, args[1]);
+            //change directory
+            chdir(buff);
+            clearBuff(buff);
+        }
+    }
+}
+
+// Entry: A string of size (PATH_MAX + 1)
+// Exit: A string of size (PATH_MAX + 1) with all values set to '\0'
 void clearBuff(char buff[PATH_MAX + 1])
 {
     int i = 0;
@@ -332,6 +473,9 @@ void clearBuff(char buff[PATH_MAX + 1])
     }
 }
 
+// Entry: A string of size (PATH_MAX + 1)
+// Exit: the position of the last "/" in the string
+//          -1 if not found
 int prevDirPos(char buff[PATH_MAX + 1])
 {
     int i = strlen(buff);
@@ -342,35 +486,53 @@ int prevDirPos(char buff[PATH_MAX + 1])
             return i;
         }
     }
-    return 0;
+    return -1;
 }
 
-int main()
+//*****************************************************************************
+//                              CLEANUP FUNCTIONS
+//*****************************************************************************
+
+// Entry:
+// Exit:
+void freeArgs(char **args)
 {
-    char *line;
-    char **args;
-    char buff[PATH_MAX + 1];
-    int shLoop = 1;
-    int upDir;
+    int i;
+    for(i = 0; i < ARGSIZE; i++)
+    {
+        free(args[i]);
+        args[i] = NULL;
+    }
+    free(args);
+    args = NULL;
+}
+
+// Entry:
+// Exit:
+void killChProcs(pid_t *allPid)
+{
+    int i;
+    for(i = 0; i < 1000; i++)
+    {
+        if(allPid[i] == 0) break;
+        kill(allPid[i], SIGKILL);
+    }
+}
+
+//*****************************************************************************
+//                        BACKGROUND PROCESS FUNCTIONS
+//*****************************************************************************
+
+// Entry: call to function
+// Exit: when all waiting background processes have been waited on and status
+//          printed to stdout
+void checkBgProcs()
+{
     pid_t bgPid;
     int bgStat;
-    int fgStat = 0;
-
-
-    struct sigaction act, fgChild;
-    act.sa_handler = SIG_IGN;
-
-    sigaction(SIGINT, &act, &fgChild);
-
+    bgPid = 0;
     do {
-        //assistance for allocating the args array dynamically taken from the following site
-        //http://stackoverflow.com/questions/7652293/how-do-i-dynamically-allocate-an-array-of-strings-in-c
-        args = (char **) malloc(sizeof(char *) * ARGSIZE);
-        if(args == NULL) exit(1);   //memory did not allocate properly
-
-        fflush(stdout);
-
-        //Check for background process completion
+        //Check for background processes
         bgPid = waitpid(-1, &bgStat, WNOHANG);
         if(bgPid > 0)
         {
@@ -385,85 +547,5 @@ int main()
                 printf("background pid %d is done: terminated by signal %d\n", (int)bgPid, WTERMSIG(bgStat));
             }
         }
-
-        //printing the prompt, reading input, and tokenizing input
-        fflush(stdout);
-        printf(": ");
-        fflush(stdout);
-        line = shRead();
-        shSplit(line, args);
-
-        //Handling blank input
-        if (args[0] == NULL)
-        {
-            freeArgs(args); //TODO: is this needed?
-            continue;
-        }
-
-        //Handle comments, builtins, then execute if none of those
-        if (strcmp(args[0], "#") == 0)
-        {
-            //Handling comments
-            //this is not necessary as all code is in if else statements (shExe) will
-            //not be called because it is in the else stmt of this block
-            freeArgs(args);
-            continue;
-        }
-        else if(strcmp(args[0], "exit") == 0)
-        {
-            //TODO work out how the loop should work with exit
-            //shLoop = 0;
-            freeArgs(args);
-            exit(0);
-        }
-        else if (strcmp(args[0], "status") == 0)
-        {
-            if (WIFEXITED(fgStat))
-            {
-                printf("exit value %d\n", WEXITSTATUS(fgStat));
-            }
-            else if (WIFSIGNALED(fgStat))
-            {
-                printf("terminated by signal %d\n", WTERMSIG(fgStat));
-            }
-
-        }
-        else if (strcmp(args[0], "cd") == 0)
-        {
-            if (args[1] == NULL)
-            {
-                //this needs to do what cd does
-                chdir(getenv("HOME"));
-            }
-            else if (strcmp(args[1], "..") == 0)
-            {
-                //this needs to move up a path
-                if (getcwd(buff, PATH_MAX) != NULL)
-                {
-                    upDir = prevDirPos(buff);
-                    buff[upDir] = '\0';
-                    chdir(buff);
-                    clearBuff(buff);
-                }
-            }
-            else
-            {
-                //chdir(args[1]);
-                if (getcwd(buff, PATH_MAX) != NULL)
-                {
-                    strcat(buff, "/");
-                    strcat(buff, args[1]);
-                    chdir(buff);
-                    clearBuff(buff);
-                }
-            }
-        }
-        else
-        {
-            shExe(args, &fgStat, &fgChild);
-        }
-        freeArgs(args);
-    } while(shLoop);
-
-    return 0;
+    } while (bgPid > 0);
 }
