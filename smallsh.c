@@ -32,6 +32,7 @@ void killChProcs(pid_t *allPid);
 void checkBgProcs();
 void shExe(char **args, int *fgStat, struct sigaction *fgChild, pid_t *allPid);
 void cdFunc(char **args);
+void safeStringCat(char *dest, const char *source, int destMax);
 
 int main()
 {
@@ -96,7 +97,7 @@ int main()
             freeArgs(args);
             continue;
         }
-        else if(strcmp(args[0], "exit") == 0)
+        else if(strncmp(args[0], "exit", strnlen(args[0], 5)) == 0)
         {
             //make sure all children processes have been killed
             killChProcs(allPid);
@@ -105,7 +106,7 @@ int main()
             freeArgs(args);
             exit(0);
         }
-        else if (strcmp(args[0], "status") == 0)
+        else if (strncmp(args[0], "status", strnlen(args[0], 7)) == 0)
         {
             //referenced http://linux.die.net/man/2/waitpid
             //for example code and definitions
@@ -122,7 +123,7 @@ int main()
                 printf("terminated by signal %d\n", WTERMSIG(fgStat));
             }
         }
-        else if (strcmp(args[0], "cd") == 0)
+        else if (strncmp(args[0], "cd", strnlen(args[0], 3)) == 0)
         {
             cdFunc(args);
         }
@@ -191,8 +192,7 @@ void shExe(char **args, int *fgStat, struct sigaction *fgChild, pid_t *allPid)
         pos = 0;
         while(args[pos] != NULL)
         {
-            //printf("%s\n", args[pos]);
-            if(strcmp(args[pos], "<") == 0)
+            if(strncmp(args[pos], "<", 1) == 0)
             {
                 //input redirection
                 fd2 = open(args[pos + 1], O_RDONLY);
@@ -212,7 +212,7 @@ void shExe(char **args, int *fgStat, struct sigaction *fgChild, pid_t *allPid)
                 free(args[pos]);
                 args[pos] = NULL;
             }
-            else if (strcmp(args[pos], ">") == 0)
+            else if (strncmp(args[pos], ">", 1) == 0)
             {
                 //output redirection
                 fd = open(args[pos + 1], O_WRONLY|O_CREAT|O_TRUNC, 0644);
@@ -233,7 +233,7 @@ void shExe(char **args, int *fgStat, struct sigaction *fgChild, pid_t *allPid)
                 args[pos] = NULL;
 
             }
-            else if (strcmp(args[pos], "&") == 0)
+            else if (strncmp(args[pos], "&", 1) == 0)
             {
                 //BACKGROUND PROCESS
                 //since & must come last IO redirect will be set
@@ -457,14 +457,15 @@ void cdFunc(char **args)
         }
         else
         {
+            //RELATIVE PATH
             //moving down a folder (eg "cd cs344")
             if (getcwd(buff, PATH_MAX) != NULL)
             {
                 //buff has the current working directory
                 //append a "/"
-                strcat(buff, "/");
+                safeStringCat(buff, "/", PATH_MAX + 1);
                 //append the folder name
-                strcat(buff, args[1]);
+                safeStringCat(buff, args[1], PATH_MAX + 1);
                 //change directory
                 chdir(buff);
                 clearBuff(buff);
@@ -546,4 +547,30 @@ void checkBgProcs()
             }
         }
     } while (bgPid > 0);
+}
+
+//*****************************************************************************
+//                              STRING FUNCTIONS
+//*****************************************************************************
+
+//entry:    destination string, source string to append on destination string
+//          and and integer indicating the maximum size of the destination string
+//exit:     The source will be appended to the destination up to the destinations
+//          max length - 1 where a null character is guaranteed
+void safeStringCat(char *dest, const char *source, int destMax)
+{
+    size_t destLength, catLength;
+    //size cannot be less than zero
+    if( destMax < 0 ) exit(1);
+    //get the length of the string in the destination
+    destLength = strnlen(dest, destMax);
+    //if the destination is smaller than it's max size
+    if( destLength < destMax ) {
+        //set the catLength to size - destLenght
+        catLength = destMax - destLength;
+        //Concat the string
+        strncat(dest, source, catLength);
+        //ensure the terminating null is in there
+        dest[destMax - 1] = '\0';
+    }
 }
