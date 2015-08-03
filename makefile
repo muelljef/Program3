@@ -1,8 +1,8 @@
-smallsh: main.o
-	cc -o smallsh main.o
+smallsh: smallsh.o
+	cc -o smallsh smallsh.o
 
-main.o: main.c
-	cc -c main.c
+smallsh.o: smallsh.c
+	cc -c smallsh.c
 
 clean:
-	rm smallsh main.o
+	rm smallsh smallsh.o

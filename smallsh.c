@@ -1,3 +1,14 @@
+//Author:           Jeff Mueller
+//Date Created:     28-July-2015
+//Description:      This is a basic shell program: that has 3 built in commands status, cd, and exit
+//                  All arguments must be separated by spaces
+//                  exit does not accept any other parameters
+//                  cd accepts 0 or 1 parements, just cd will change directory to path specified by HOME
+//                  status will output the last foreground process exit status
+//                  The shell ignores blank lines and lines starting with # (as comments)
+//                  The shell supports input and output redirection < and >
+//                  The & will execute the process in the background
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +19,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+//Max buffer size and arguments as specified by the assignment
 #define BUFFER 2048
 #define ARGSIZE 512
 
@@ -96,12 +108,18 @@ int main()
         }
         else if (strcmp(args[0], "status") == 0)
         {
+            //referenced http://linux.die.net/man/2/waitpid
+            //for example code and definitions
+            //if exited normally
             if (WIFEXITED(fgStat))
             {
+                //print the exit status
                 printf("exit value %d\n", WEXITSTATUS(fgStat));
             }
+            //if exited by signal
             else if (WIFSIGNALED(fgStat))
             {
+                //print the signal that terminated
                 printf("terminated by signal %d\n", WTERMSIG(fgStat));
             }
         }
@@ -123,11 +141,16 @@ int main()
 }
 
 //*****************************************************************************
-//                              SHELL EXECUTION FUNCTION
+//                         SHELL EXECUTION FUNCTION
 //*****************************************************************************
 
-//Entry:
-//Exit:
+//Entry:    requires an array of dynamiclaly allocated strings as arguments,
+//          an address of an integer to keep the foreground status
+//          an address of a struct sigaction to change child fg proc to default
+//          an array of pid_t to hold all the child procs pid created
+//Exit:     will execute based on args array a background or foreground process
+//          adding the process to the allPid array, updating the fgStat.
+//          function waits for fg procs and continues after launching bg procs
 void shExe(char **args, int *fgStat, struct sigaction *fgChild, pid_t *allPid)
 {
     //pos and i as iterators,
@@ -318,9 +341,10 @@ void shExe(char **args, int *fgStat, struct sigaction *fgChild, pid_t *allPid)
 //                              HELPER INPUT FUNCTIONS
 //*****************************************************************************
 
-// Entry:
-// Exit:
-// adjust code from website
+// Entry:   none
+// Exit:    return a pointer to a C-string
+// adjusted read in code from http://stephen-brennan.com/2015/01/16/write-a-shell-in-c/
+// to read in the max buffer size specified in the assignment specifications
 char* shRead()
 {
     int c;
@@ -364,8 +388,13 @@ char* shRead()
     }
 }
 
-// Entry:
-// Exit:
+// Entry:   A dynamically allocated string that has arguments separated by spaces
+//          args must have the array of (char *) dynamically allocated prior to the call
+// Exit:    line is tokenized into arguments separated by the spaces and copies of those
+//          arguments are dynamically allocated strings pointed to by the args array.
+//          Any empty spaces in the args array are filled with NULL
+//          NOTE: function will exit if there are more arguments than ARGSIZE - 1 (511)
+//          as execv functions require the array to end in a NULL.
 void shSplit(char *line, char **args)
 {
     //container for the arguments
@@ -385,7 +414,7 @@ void shSplit(char *line, char **args)
     while (token != NULL)
     {
         //Exit if too many arguments
-        if (pos >= ARGSIZE)
+        if (pos >= ARGSIZE - 1)
         {
             perror("arguments");
             exit(1);
@@ -407,6 +436,9 @@ void shSplit(char *line, char **args)
 //                              CD FUNCTIONS
 //*****************************************************************************
 
+//Entry:    A dynamically allocated array of strings where "cd" is the first arg
+//Exit:     Working directory will be changed based on the 2nd argument if given
+//          A "cd" only will change directory to path specified by HOME
 void cdFunc(char **args)
 {
     char buff[PATH_MAX + 1];    //to store path for cd command
@@ -493,8 +525,8 @@ int prevDirPos(char buff[PATH_MAX + 1])
 //                              CLEANUP FUNCTIONS
 //*****************************************************************************
 
-// Entry:
-// Exit:
+// Entry:   A dynamically allocated (ARGSIZE) array of strings
+// Exit:    Memory for the array is freed
 void freeArgs(char **args)
 {
     int i;
@@ -507,8 +539,11 @@ void freeArgs(char **args)
     args = NULL;
 }
 
-// Entry:
-// Exit:
+// Entry:   An array of child processes where all child processes are stored at
+//          the beginning of the array and the rest of the array is filled with
+//          0's
+// Exit:    All proc id's will have the kill command called on them to ensure all
+//          children processes have ended
 void killChProcs(pid_t *allPid)
 {
     int i;
