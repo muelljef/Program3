@@ -28,7 +28,6 @@ void shSplit(char *line, char **args);
 void freeArgs(char **args);
 char* shRead();
 void clearBuff(char buff[PATH_MAX + 1]);
-int prevDirPos(char buff[PATH_MAX + 1]);
 void killChProcs(pid_t *allPid);
 void checkBgProcs();
 void shExe(char **args, int *fgStat, struct sigaction *fgChild, pid_t *allPid);
@@ -442,54 +441,34 @@ void shSplit(char *line, char **args)
 void cdFunc(char **args)
 {
     char buff[PATH_MAX + 1];    //to store path for cd command
-    int upDir;                  //rel path boolean to move up a directory
 
     if (args[1] == NULL)
     {
         //cd command alone
         chdir(getenv("HOME"));
     }
-    else if (strcmp(args[1], "..") == 0)
+    else
     {
-        //moving up a path "cd .."
-        if (getcwd(buff, PATH_MAX) != NULL)
+        if(args[1][0] == '/')
         {
-            //get the location of the last "/"
-            upDir = prevDirPos(buff);
-            //protect the root directory
-            if(upDir > 0)
+            //ABSOLUTE PATH
+            //change to path in args 1
+            chdir(args[1]);
+        }
+        else
+        {
+            //moving down a folder (eg "cd cs344")
+            if (getcwd(buff, PATH_MAX) != NULL)
             {
-                //replace it with null to set path up one folder
-                buff[upDir] = '\0';
+                //buff has the current working directory
+                //append a "/"
+                strcat(buff, "/");
+                //append the folder name
+                strcat(buff, args[1]);
                 //change directory
                 chdir(buff);
                 clearBuff(buff);
             }
-            else if (upDir == 0)
-            {
-                //if upDir is 0, then change to root directory
-                chdir("/");
-            }
-            else
-            {
-                //let user know they cannot move higher
-                printf("In root directory, cannot move higher");
-            }
-        }
-    }
-    else
-    {
-        //moving down a folder (eg "cd cs344")
-        if (getcwd(buff, PATH_MAX) != NULL)
-        {
-            //buff has the current working directory
-            //append a "/"
-            strcat(buff, "/");
-            //append the folder name
-            strcat(buff, args[1]);
-            //change directory
-            chdir(buff);
-            clearBuff(buff);
         }
     }
 }
@@ -503,22 +482,6 @@ void clearBuff(char buff[PATH_MAX + 1])
     {
         buff[i] = '\0';
     }
-}
-
-// Entry: A string of size (PATH_MAX + 1)
-// Exit: the position of the last "/" in the string
-//          -1 if not found
-int prevDirPos(char buff[PATH_MAX + 1])
-{
-    int i = strlen(buff);
-    for(; i >= 0; i--)
-    {
-        if(buff[i] == '/')
-        {
-            return i;
-        }
-    }
-    return -1;
 }
 
 //*****************************************************************************
